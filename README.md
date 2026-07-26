@@ -4,13 +4,33 @@
 
 `mate` is a safe meta package manager based on Rust. It discovers supported package-manager instances in trusted system locations and `PATH`, searches them with bounded parallelism, asks the user to choose both a manager and an install target, shows the complete plan, and starts install after confirmation.
 
-This project supports:
+> [!IMPORTANT]
+> `mate` is currently a prototype, please review every plan before confirming it, especially when on a instance you care about.
 
-- APT (`apt-get` + `apt-cache`)
-- pacman
-- Homebrew
-- pip
-- uv
+## Why mate?
+
+Installing the same tool can mean `apt-get install`, `brew install`, `cargo install`, `npm install`, `pip install`, or `uv tool install`. `mate` provides one workflow while retaining each manager's native package identity and install model:
+
+1. Discover available manager instances and context-aware targets.
+2. Search supported registries with bounded parallelism.
+3. Select a verified package, manager instance, and target.
+4. Inspect the exact commands, working directories, environment changes, privileges, and filesystem guards.
+5. Confirm, then run the plan serially.
+
+## Supported managers
+
+| Manager | Search source | Supported targets | install behaviour |
+| --- | --- | --- | --- |
+| APT | Configured APT repos | `system` | `apt-get install -- ...` via trusted `sudo` |
+| pacman | Configured pacman repos | `system` | `pacman -S --needed -- ...` via trusted `sudo` |
+| Homebrew | Homebrew formulae | `user` | `brew install --formula ...` |
+| Cargo | [crates.io](https://crates.io) | Cargo install roots | One pinned `cargo install --locked` step per crate |
+| npm | Public npm registry | Detected project, workspace, or global prefix | Pinned install with lifecycle scripts disabled |
+| pip | Public PyPI | `user`, or the environment owning a discovered venv-bound `pip` | One pinned, batched `pip install` |
+| uv | Public PyPI | `user` or Python virtual environment | `uv tool install`, or create/use a venv and run `uv pip install` |
+
+Python searches currently perform exact distribution lookups on public PyPI. Private indexes, version constraints in queries, and fuzzy Python package search are **not** supported.
+
 
 ## Build
 
@@ -59,8 +79,9 @@ mate install requests rich \
   --yes
 ```
 
-After reviewing the dry run, omit `--dry-run` to execute that same explicit
-selection:
+> NOTE: To prevent typosquatting attacks, flag `--yes` does not yes during the fuzzy searches, regardless of wheather the `instance` param is included.
+
+After reviewing the dry run, omit `--dry-run` to execute that same explicit selection:
 
 ```sh
 mate install requests rich \
@@ -81,23 +102,7 @@ For APT:
 mate install ripgrep jq --manager apt --target system --dry-run --yes
 ```
 
-## Target behaviour
-
-| Manager | Target | Planned behaviour |
-| --- | --- | --- |
-| apt | `system` | `apt-get install -- ...` |
-| pacman | `system` | `pacman -S --needed -- ...` |
-| brew formula | `user` | `brew install --formula ...` |
-| pip outside venv | `user` | `pip install --user ...` |
-| pip from an explicitly active external venv | matching `venv:/...` | `pip install ...` |
-| uv | `user` | one `uv tool install ...` per package |
-| uv | existing/new `venv:/...` | `uv venv` if needed, then one batched `uv pip install` |
-
-`pip` and `uv` currently use an exact public-PyPI JSON lookup and install from that same explicitly selected source. Private Python indexes and fuzzy search are intentionally unsupported.
-
-A batch accepts at most 64 unique queries. Search jobs are limited to 8 in flight; installation groups execute serially and stop on the first failure.
-
-## Architecture
+## Development
 
 The core types are:
 
@@ -109,16 +114,30 @@ The core types are:
 
 Adapters only produce structured `CommandSpec` values. The executor is the sole component allowed to launch an install command.
 
+```sh
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 Source layout:
 
 ```text
 src/
-  adapters/    apt, pacman, brew, pip, uv
-  cli.rs       command-line contract
-  context.rs   project markers and target discovery
-  engine.rs    doctor/search/install orchestration
-  model.rs     normalized domain types
-  planner.rs   batch grouping and plan construction
-  process.rs   bounded read-only probes and confirmed execution
-  ui.rs        rendering, selection, and confirmation
+├── adapters/   Package-manager discovery, search, targets, and plan generation
+├── cli.rs      Command-line contract
+├── context.rs  Project markers and target discovery
+├── engine.rs   Doctor, search, and install orchestration
+├── matching.rs Candidate normalization, ranking, and fuzzy fallback
+├── model.rs    Shared domain types
+├── planner.rs  Selection grouping and command-plan construction
+├── process.rs  Bounded probes and confirmed command execution
+├── platform.rs Platform-specific path and ownership handling
+└── ui.rs       Rendering, interactive selection, and confirmation
 ```
+
+Adapters produce structured command specifications; only the process executor launches install commands.
+
+## License
+
+[MIT](LICENSE)
