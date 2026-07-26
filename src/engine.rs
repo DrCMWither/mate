@@ -170,6 +170,7 @@ fn normalize_packages(packages: Vec<String>) -> Result<Vec<String>> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
     for package in packages {
+        let package = package.trim().to_owned();
         validate_query(&package)?;
         if seen.insert(package.clone()) {
             normalized.push(package);
@@ -205,7 +206,7 @@ fn ensure_managers_found(instances: &[ManagerInstance], requested: &[ManagerKind
 mod tests {
     use std::path::PathBuf;
 
-    use super::include_instance_targets;
+    use super::{include_instance_targets, normalize_packages};
     use crate::adapters::Registry;
     use crate::context::ProjectContext;
     use crate::model::{InstanceScope, ManagerInstance, ManagerKind};
@@ -235,5 +236,12 @@ mod tests {
             context.targets[0].id,
             format!("node-global:{}", prefix.display())
         );
+    }
+
+    #[test]
+    fn package_queries_are_trimmed_and_deduplicated() {
+        let packages =
+            normalize_packages(vec![" ripgrep ".into(), "ripgrep".into(), " jq".into()]).unwrap();
+        assert_eq!(packages, ["ripgrep", "jq"]);
     }
 }

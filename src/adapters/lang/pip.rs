@@ -7,7 +7,8 @@ use super::pypi;
 use crate::adapters::{validate_query, ManagerAdapter};
 use crate::context::ProjectContext;
 use crate::model::{
-    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, Target, TargetKind,
+    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, MatchKind, Target,
+    TargetKind,
 };
 use crate::platform;
 use crate::process::{find_all_on_path, probe_version, safe_user_executable};
@@ -59,15 +60,18 @@ impl ManagerAdapter for PipAdapter {
         let Some(package) = pypi::exact_lookup(query).await? else {
             return Ok(Vec::new());
         };
+        let match_name = package.name;
         Ok(vec![Candidate {
             query: query.to_owned(),
-            package: package.name,
+            package: match_name.clone(),
+            match_name,
             manager_instance_id: instance.id.clone(),
             manager: self.kind(),
             source: "https://pypi.org/simple".into(),
             version: Some(package.version),
             description: package.summary,
-            score: 100,
+            score: 0,
+            match_kind: MatchKind::None,
             verified: true,
         }])
     }

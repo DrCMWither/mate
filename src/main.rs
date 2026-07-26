@@ -2,6 +2,7 @@ mod adapters;
 mod cli;
 mod context;
 mod engine;
+mod matching;
 mod model;
 mod planner;
 mod platform;

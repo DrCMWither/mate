@@ -6,10 +6,11 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{discover_launchers, owned_env_removals, NodeLauncher, NODE_ENV_REMOVALS};
-use crate::adapters::{score_match, validate_package_id, validate_query, ManagerAdapter};
+use crate::adapters::{validate_package_id, validate_query, ManagerAdapter};
 use crate::context::ProjectContext;
 use crate::model::{
-    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, Target, TargetKind,
+    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, MatchKind, Target,
+    TargetKind,
 };
 use crate::platform;
 use crate::process::{probe_version_sanitized, safe_diagnostic, search_command_sanitized};
@@ -22,6 +23,10 @@ pub struct NpmAdapter;
 impl ManagerAdapter for NpmAdapter {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Npm
+    }
+
+    fn supports_fuzzy_fallback(&self) -> bool {
+        true
     }
 
     async fn discover(&self, context: &ProjectContext) -> Result<Vec<ManagerInstance>> {
@@ -290,12 +295,14 @@ fn parse_search(text: &str, query: &str, instance_id: &str) -> Result<Vec<Candid
             Some(Candidate {
                 query: query.to_owned(),
                 package: package.to_owned(),
+                match_name: package.to_owned(),
                 manager_instance_id: instance_id.to_owned(),
                 manager: ManagerKind::Npm,
                 source: NPM_REGISTRY.into(),
                 version: Some(version.to_owned()),
                 description,
-                score: score_match(query, package),
+                score: 0,
+                match_kind: MatchKind::None,
                 verified: true,
             })
         })
@@ -379,7 +386,7 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].package, "typescript");
         assert_eq!(found[0].version.as_deref(), Some("5.9.2"));
-        assert_eq!(found[0].score, 100);
+        assert_eq!(found[0].match_name, "typescript");
         assert_eq!(found[1].package, "@types/node");
     }
 

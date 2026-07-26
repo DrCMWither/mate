@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use super::{score_match, validate_query, ManagerAdapter};
+use super::{validate_query, ManagerAdapter, MAX_RAW_CANDIDATES};
 use crate::context::ProjectContext;
 use crate::model::{
-    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, Target, TargetKind,
+    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, MatchKind, Target,
+    TargetKind,
 };
 use crate::process::{
     find_all_on_path, probe_version, safe_diagnostic, safe_user_executable,
@@ -19,6 +20,10 @@ pub struct BrewAdapter;
 impl ManagerAdapter for BrewAdapter {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Brew
+    }
+
+    fn supports_fuzzy_fallback(&self) -> bool {
+        true
     }
 
     async fn discover(&self, context: &ProjectContext) -> Result<Vec<ManagerInstance>> {
@@ -109,15 +114,17 @@ pub(crate) fn parse_search(text: &str, query: &str, instance_id: &str) -> Vec<Ca
         .map(|package| Candidate {
             query: query.to_owned(),
             package: package.to_owned(),
+            match_name: package.to_owned(),
             manager_instance_id: instance_id.to_owned(),
             manager: ManagerKind::Brew,
             source: "Homebrew formulae".into(),
             version: None,
             description: None,
-            score: score_match(query, package),
+            score: 0,
+            match_kind: MatchKind::None,
             verified: true,
         })
-        .take(40)
+        .take(MAX_RAW_CANDIDATES)
         .collect()
 }
 

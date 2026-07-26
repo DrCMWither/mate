@@ -34,6 +34,41 @@ impl fmt::Display for ManagerKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MatchKind {
+    None,
+    Provider,
+    Description,
+    Edit,
+    Contains,
+    Tokens,
+    Prefix,
+    CompactExact,
+    NormalizedExact,
+    CanonicalExact,
+    Exact,
+}
+
+impl fmt::Display for MatchKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::None => "none",
+            Self::Provider => "provider",
+            Self::Description => "description",
+            Self::Edit => "edit",
+            Self::Contains => "contains",
+            Self::Tokens => "tokens",
+            Self::Prefix => "prefix",
+            Self::CompactExact => "compact-exact",
+            Self::NormalizedExact => "normalized-exact",
+            Self::CanonicalExact => "canonical-exact",
+            Self::Exact => "exact",
+        };
+        f.write_str(name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum InstanceScope {
@@ -86,12 +121,14 @@ pub struct Target {
 pub struct Candidate {
     pub query: String,
     pub package: String,
+    pub match_name: String,
     pub manager_instance_id: String,
     pub manager: ManagerKind,
     pub source: String,
     pub version: Option<String>,
     pub description: Option<String>,
     pub score: u16,
+    pub match_kind: MatchKind,
     pub verified: bool,
 }
 

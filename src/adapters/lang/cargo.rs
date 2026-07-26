@@ -4,10 +4,11 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use super::crates_io;
-use crate::adapters::{score_match, validate_query, ManagerAdapter};
+use crate::adapters::{validate_query, ManagerAdapter};
 use crate::context::ProjectContext;
 use crate::model::{
-    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, Target, TargetKind,
+    Candidate, CommandSpec, InstanceScope, ManagerInstance, ManagerKind, MatchKind, Target,
+    TargetKind,
 };
 use crate::platform;
 use crate::process::{find_all_on_path, probe_version_sanitized_in, safe_user_executable};
@@ -21,6 +22,10 @@ pub struct CargoAdapter;
 impl ManagerAdapter for CargoAdapter {
     fn kind(&self) -> ManagerKind {
         ManagerKind::Cargo
+    }
+
+    fn supports_fuzzy_fallback(&self) -> bool {
+        true
     }
 
     async fn discover(&self, context: &ProjectContext) -> Result<Vec<ManagerInstance>> {
@@ -55,16 +60,21 @@ impl ManagerAdapter for CargoAdapter {
         Ok(crates_io::search(query)
             .await?
             .into_iter()
-            .map(|package| Candidate {
-                query: query.to_owned(),
-                score: score_match(query, &package.name),
-                package: package.name,
-                manager_instance_id: instance.id.clone(),
-                manager: ManagerKind::Cargo,
-                source: "https://crates.io".into(),
-                version: Some(package.version),
-                description: package.description,
-                verified: true,
+            .map(|package| {
+                let match_name = package.name;
+                Candidate {
+                    query: query.to_owned(),
+                    package: match_name.clone(),
+                    match_name,
+                    manager_instance_id: instance.id.clone(),
+                    manager: ManagerKind::Cargo,
+                    source: "https://crates.io".into(),
+                    version: Some(package.version),
+                    description: package.description,
+                    score: 0,
+                    match_kind: MatchKind::None,
+                    verified: true,
+                }
             })
             .collect())
     }

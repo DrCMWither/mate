@@ -1,3 +1,5 @@
+<img src=https://github.com/DrCMWither/qsisp/blob/master/assets/logo/qsisp.png width=300 />
+
 # mate
 
 `mate` is a safe meta package manager based on Rust. It discovers supported package-manager instances in trusted system locations and `PATH`, searches them with bounded parallelism, asks the user to choose both a manager and an install target, shows the complete plan, and starts install after confirmation.

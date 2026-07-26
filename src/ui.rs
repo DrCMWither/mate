@@ -8,6 +8,7 @@ use dialoguer::{theme::ColorfulTheme, Confirm, Select};
 
 use crate::adapters::Registry;
 use crate::context::ProjectContext;
+use crate::matching;
 use crate::model::{Candidate, InstallPlan, ManagerInstance, Selection, Target};
 
 pub fn interactive() -> bool {
@@ -83,17 +84,28 @@ pub fn select_installations(request: SelectionRequest<'_>) -> Result<Vec<Selecti
                 "no candidate compatible with the requested manager and target was found for {query:?}"
             ));
         }
-        sort_candidates(query, &mut options);
+        matching::sort_candidates(&mut options);
         deduplicate_logical_candidates(&mut options);
 
         let candidate = if allow_prompts {
-            let labels = options.iter().map(candidate_label).collect::<Vec<_>>();
+            let fuzzy_only = options
+                .first()
+                .is_none_or(|candidate| !matching::is_unattended_exact(candidate));
+            let mut labels = options.iter().map(candidate_label).collect::<Vec<_>>();
+            if fuzzy_only {
+                labels.insert(0, "Cancel (no exact package-name match)".into());
+            }
             let index = Select::with_theme(&theme)
                 .with_prompt(format!("Select manager and package for {query}"))
                 .items(&labels)
                 .default(0)
                 .interact()?;
-            options[index].clone()
+            if fuzzy_only && index == 0 {
+                return Err(anyhow!(
+                    "selection cancelled because {query:?} has only fuzzy matches"
+                ));
+            }
+            options[index - usize::from(fuzzy_only)].clone()
         } else {
             choose_unattended_candidate(query, &options)?
         };
@@ -131,18 +143,17 @@ fn choose_unattended_candidate(query: &str, options: &[Candidate]) -> Result<Can
             .collect::<Vec<_>>()
             .join(", ");
         return Err(anyhow!(
-            "{query:?} matched candidates from multiple manager instances ({ids}); pass --instance with one of these ids or run interactively"
+            "{query:?} matched candidates from multiple manager instances ({ids}); pass --instance with one of these ids to choose the source, or run interactively. --instance does not authorize unattended fuzzy selection"
         ));
     }
 
     let Some(best) = options.first() else {
         return Err(anyhow!("no candidate was found for {query:?}"));
     };
-    let best_is_exact = exact_package_match(query, best);
     let tied = options
         .iter()
         .take_while(|candidate| {
-            exact_package_match(query, candidate) == best_is_exact && candidate.score == best.score
+            candidate.match_kind == best.match_kind && candidate.score == best.score
         })
         .collect::<Vec<_>>();
     if tied.len() > 1 {
@@ -158,22 +169,22 @@ fn choose_unattended_candidate(query: &str, options: &[Candidate]) -> Result<Can
             best.score
         ));
     }
+    if !matching::is_unattended_exact(best) {
+        if matching::is_identity_exact(best) {
+            return Err(anyhow!(
+                "{query:?} matched {:?} exactly, but that candidate was not verified by its adapter; refusing unattended installation",
+                terminal_safe(&best.package)
+            ));
+        }
+        return Err(anyhow!(
+            "{query:?} has no verified exact package-name match; best fuzzy suggestion is {:?} (match {}, score {}). Re-run with the exact package name {:?} after review, or run interactively",
+            terminal_safe(&best.package),
+            best.match_kind,
+            best.score,
+            terminal_safe(&best.match_name)
+        ));
+    }
     Ok(best.clone())
-}
-
-fn sort_candidates(query: &str, candidates: &mut [Candidate]) {
-    candidates.sort_by(|a, b| {
-        (b.package == query)
-            .cmp(&(a.package == query))
-            .then_with(|| exact_package_match(query, b).cmp(&exact_package_match(query, a)))
-            .then_with(|| b.score.cmp(&a.score))
-            .then_with(|| a.manager_instance_id.cmp(&b.manager_instance_id))
-            .then_with(|| a.manager.cmp(&b.manager))
-            .then_with(|| a.package.cmp(&b.package))
-            .then_with(|| a.version.cmp(&b.version))
-            .then_with(|| b.verified.cmp(&a.verified))
-            .then_with(|| a.source.cmp(&b.source))
-    });
 }
 
 fn deduplicate_logical_candidates(candidates: &mut Vec<Candidate>) {
@@ -185,10 +196,6 @@ fn deduplicate_logical_candidates(candidates: &mut Vec<Candidate>) {
             candidate.version.clone(),
         ))
     });
-}
-
-fn exact_package_match(query: &str, candidate: &Candidate) -> bool {
-    candidate.package.eq_ignore_ascii_case(query)
 }
 
 fn choose_target(
@@ -314,7 +321,12 @@ fn render_plan(plan: &InstallPlan, inherited_cwd: &Path) -> String {
             terminal_safe(&selection.query),
             selection.candidate.manager,
             terminal_safe(&selection.candidate.package),
-            terminal_safe(&selection.target.id)
+            terminal_safe(&selection.target.id),
+        );
+        let _ = writeln!(
+            output,
+            "    match: {} (score {})",
+            selection.candidate.match_kind, selection.candidate.score
         );
     }
     let _ = writeln!(output, "\nCommands:");
@@ -412,10 +424,11 @@ pub fn confirm_plan() -> Result<bool> {
 
 fn candidate_label(candidate: &Candidate) -> String {
     format!(
-        "{:<7} {:<28} {:<14} score={}{} @ {} [{}]",
+        "{:<7} {:<28} {:<14} match={:<16} score={}{} @ {} [{}]",
         candidate.manager,
         terminal_safe(&candidate.package),
         terminal_safe(candidate.version.as_deref().unwrap_or("version ?")),
+        candidate.match_kind,
         candidate.score,
         if candidate.verified {
             ""
@@ -475,8 +488,8 @@ mod tests {
     use crate::adapters::Registry;
     use crate::context::ProjectContext;
     use crate::model::{
-        Candidate, CommandSpec, InstallPlan, InstanceScope, ManagerInstance, ManagerKind, Target,
-        TargetKind,
+        Candidate, CommandSpec, InstallPlan, InstanceScope, ManagerInstance, ManagerKind,
+        MatchKind, Selection, Target, TargetKind,
     };
 
     fn system_context() -> ProjectContext {
@@ -510,12 +523,24 @@ mod tests {
         Candidate {
             query: query.into(),
             package: package.into(),
+            match_name: package.into(),
             manager_instance_id: instance.into(),
             manager: ManagerKind::Apt,
             source: "APT configured repositories".into(),
             version: None,
             description: None,
-            score,
+            score: if package == query {
+                score
+            } else if package.eq_ignore_ascii_case(query) {
+                score.saturating_sub(1)
+            } else {
+                score
+            },
+            match_kind: if package.eq_ignore_ascii_case(query) {
+                MatchKind::Exact
+            } else {
+                MatchKind::Prefix
+            },
             verified: true,
         }
     }
@@ -609,6 +634,86 @@ mod tests {
     }
 
     #[test]
+    fn unattended_selection_rejects_a_unique_fuzzy_suggestion() {
+        let registry = Registry::standard();
+        let context = system_context();
+        let instances = vec![apt_instance("apt:one")];
+        let queries = vec!["ripgrpe".to_owned()];
+        let mut candidate = apt_candidate("ripgrpe", "ripgrep", "apt:one", 620);
+        candidate.match_kind = MatchKind::Edit;
+
+        let error = select_installations(SelectionRequest {
+            registry: &registry,
+            context: &context,
+            instances: &instances,
+            queries: &queries,
+            candidates: &[candidate],
+            target_override: Some("system"),
+            instance_override: Some("apt:one"),
+            allow_prompts: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("no verified exact package-name match"));
+        assert!(error.contains("ripgrep"));
+        assert!(!error.contains("--instance"));
+    }
+
+    #[test]
+    fn unattended_selection_rejects_an_unverified_exact_candidate() {
+        let registry = Registry::standard();
+        let context = system_context();
+        let instances = vec![apt_instance("apt:one")];
+        let queries = vec!["ripgrep".to_owned()];
+        let mut candidate = apt_candidate("ripgrep", "ripgrep", "apt:one", 1_000);
+        candidate.verified = false;
+
+        let error = select_installations(SelectionRequest {
+            registry: &registry,
+            context: &context,
+            instances: &instances,
+            queries: &queries,
+            candidates: &[candidate],
+            target_override: Some("system"),
+            instance_override: Some("apt:one"),
+            allow_prompts: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("not verified"));
+    }
+
+    #[test]
+    fn unattended_batch_rejects_before_planning_when_any_query_is_fuzzy() {
+        let registry = Registry::standard();
+        let context = system_context();
+        let instances = vec![apt_instance("apt:one")];
+        let queries = vec!["ripgrep".to_owned(), "jqqq".to_owned()];
+        let exact = apt_candidate("ripgrep", "ripgrep", "apt:one", 1_000);
+        let mut fuzzy = apt_candidate("jqqq", "jq", "apt:one", 600);
+        fuzzy.match_kind = MatchKind::Edit;
+
+        let error = select_installations(SelectionRequest {
+            registry: &registry,
+            context: &context,
+            instances: &instances,
+            queries: &queries,
+            candidates: &[exact, fuzzy],
+            target_override: Some("system"),
+            instance_override: Some("apt:one"),
+            allow_prompts: false,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("jqqq"));
+        assert!(error.contains("jq"));
+        assert!(error.contains("no verified exact package-name match"));
+    }
+
+    #[test]
     fn unattended_selection_reports_tied_packages_without_suggesting_instance() {
         let registry = Registry::standard();
         let context = system_context();
@@ -682,12 +787,14 @@ mod tests {
         let make_candidate = |instance: &str| Candidate {
             query: "requests".into(),
             package: "requests".into(),
+            match_name: "requests".into(),
             manager_instance_id: instance.into(),
             manager: ManagerKind::Pip,
             source: "https://pypi.org/simple".into(),
             version: Some("2.32.4".into()),
             description: None,
-            score: 100,
+            score: 1_000,
+            match_kind: MatchKind::Exact,
             verified: true,
         };
         let candidates = vec![make_candidate("pip:second"), make_candidate("pip:first")];
@@ -714,8 +821,20 @@ mod tests {
         env.insert("ZETA".into(), "last".into());
         env.insert("ALPHA".into(), "first\nline".into());
         let long_argument = "x".repeat(600);
+        let mut selected_candidate = apt_candidate("ripgrpe", "ripgrep", "apt:one", 620);
+        selected_candidate.match_kind = MatchKind::Edit;
         let plan = InstallPlan {
-            selections: Vec::new(),
+            selections: vec![Selection {
+                query: "ripgrpe".into(),
+                candidate: selected_candidate,
+                target: Target {
+                    id: "system".into(),
+                    kind: TargetKind::System,
+                    label: "system packages".into(),
+                    path: None,
+                    exists: true,
+                },
+            }],
             steps: vec![
                 CommandSpec {
                     label: "create environment\u{1b}".into(),
@@ -746,6 +865,8 @@ mod tests {
 
         let rendered = render_plan(&plan, PathBuf::from("/actual/cwd").as_path());
 
+        assert!(rendered.contains("ripgrpe -> apt:ripgrep -> system"));
+        assert!(rendered.contains("match: edit (score 620)"));
         assert!(rendered.contains("/usr/bin/tool install 'hello world'"));
         assert!(rendered.contains(long_argument.as_str()));
         assert!(rendered.contains("Label: create environment\\u{1b}"));

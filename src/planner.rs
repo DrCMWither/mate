@@ -84,7 +84,7 @@ fn resolved_spec(selection: &Selection) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Candidate, ManagerKind, Selection, Target, TargetKind};
+    use crate::model::{Candidate, ManagerKind, MatchKind, Selection, Target, TargetKind};
 
     use super::{resolved_spec, validate_new_target_ownership};
 
@@ -95,12 +95,14 @@ mod tests {
             candidate: Candidate {
                 query: "requests".into(),
                 package: "requests".into(),
+                match_name: "requests".into(),
                 manager_instance_id: "uv:test".into(),
                 manager: ManagerKind::Uv,
                 source: "https://pypi.org/simple".into(),
                 version: Some("2.32.4".into()),
                 description: None,
-                score: 100,
+                score: 1_000,
+                match_kind: MatchKind::Exact,
                 verified: true,
             },
             target: Target {
@@ -121,12 +123,14 @@ mod tests {
             candidate: Candidate {
                 query: package.into(),
                 package: package.into(),
+                match_name: package.into(),
                 manager_instance_id: format!("{manager}:test"),
                 manager,
                 source: "registry".into(),
                 version: Some(version.into()),
                 description: None,
-                score: 100,
+                score: 1_000,
+                match_kind: MatchKind::Exact,
                 verified: true,
             },
             target: Target {
@@ -162,12 +166,14 @@ mod tests {
             candidate: Candidate {
                 query: package.into(),
                 package: package.into(),
+                match_name: package.into(),
                 manager_instance_id: instance.into(),
                 manager: ManagerKind::Uv,
                 source: "https://pypi.org/simple".into(),
                 version: Some("1.0.0".into()),
                 description: None,
-                score: 100,
+                score: 1_000,
+                match_kind: MatchKind::Exact,
                 verified: true,
             },
             target: target.clone(),
