@@ -1,4 +1,4 @@
-<img src=https://github.com/DrCMWither/qsisp/blob/master/assets/logo/mate.svg width=300 />
+<img src=https://github.com/DrCMWither/mat/blob/master/assets/logo/mate.svg width=300 />
 
 # mate
 
