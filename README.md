@@ -1,4 +1,4 @@
-<img src=https://github.com/DrCMWither/mate/blob/master/src/assets/logo/mate.svg width=300 />
+<img src=https://github.com/DrCMWither/mate/blob/master/assets/logo/mate.svg width=300 />
 
 # mate
 
