@@ -88,24 +88,11 @@ pub fn select_installations(request: SelectionRequest<'_>) -> Result<Vec<Selecti
         deduplicate_logical_candidates(&mut options);
 
         let candidate = if allow_prompts {
-            let fuzzy_only = options
-                .first()
-                .is_none_or(|candidate| !matching::is_unattended_exact(candidate));
-            let mut labels = options.iter().map(candidate_label).collect::<Vec<_>>();
-            if fuzzy_only {
-                labels.insert(0, "Cancel (no exact package-name match)".into());
+            if let Some(candidate) = unique_verified_exact_candidate(&options) {
+                candidate
+            } else {
+                prompt_for_candidate(query, &options, &theme)?
             }
-            let index = Select::with_theme(&theme)
-                .with_prompt(format!("Select manager and package for {query}"))
-                .items(&labels)
-                .default(0)
-                .interact()?;
-            if fuzzy_only && index == 0 {
-                return Err(anyhow!(
-                    "selection cancelled because {query:?} has only fuzzy matches"
-                ));
-            }
-            options[index - usize::from(fuzzy_only)].clone()
         } else {
             choose_unattended_candidate(query, &options)?
         };
@@ -129,6 +116,39 @@ pub fn select_installations(request: SelectionRequest<'_>) -> Result<Vec<Selecti
     }
 
     Ok(selections)
+}
+
+fn unique_verified_exact_candidate(options: &[Candidate]) -> Option<Candidate> {
+    let mut exact = options
+        .iter()
+        .filter(|candidate| matching::is_unattended_exact(candidate));
+    let candidate = exact.next()?;
+    exact.next().is_none().then(|| candidate.clone())
+}
+
+fn prompt_for_candidate(
+    query: &str,
+    options: &[Candidate],
+    theme: &ColorfulTheme,
+) -> Result<Candidate> {
+    let fuzzy_only = options
+        .first()
+        .is_none_or(|candidate| !matching::is_unattended_exact(candidate));
+    let mut labels = options.iter().map(candidate_label).collect::<Vec<_>>();
+    if fuzzy_only {
+        labels.insert(0, "Cancel (no exact package-name match)".into());
+    }
+    let index = Select::with_theme(theme)
+        .with_prompt(format!("Select manager and package for {query}"))
+        .items(&labels)
+        .default(0)
+        .interact()?;
+    if fuzzy_only && index == 0 {
+        return Err(anyhow!(
+            "selection cancelled because {query:?} has only fuzzy matches"
+        ));
+    }
+    Ok(options[index - usize::from(fuzzy_only)].clone())
 }
 
 fn choose_unattended_candidate(query: &str, options: &[Candidate]) -> Result<Candidate> {
@@ -424,7 +444,7 @@ pub fn confirm_plan() -> Result<bool> {
 
 fn candidate_label(candidate: &Candidate) -> String {
     format!(
-        "{:<7} {:<28} {:<14} match={:<16} score={}{} @ {} [{}]",
+        "{:<7} {:<28} {:<14} match: {:<16} score: {}{} @ {} [{}]",
         candidate.manager,
         terminal_safe(&candidate.package),
         terminal_safe(candidate.version.as_deref().unwrap_or("version ?")),
@@ -484,7 +504,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use super::{render_plan, select_installations, SelectionRequest};
+    use super::{
+        render_plan, select_installations, unique_verified_exact_candidate, SelectionRequest,
+    };
     use crate::adapters::Registry;
     use crate::context::ProjectContext;
     use crate::model::{
@@ -543,6 +565,51 @@ mod tests {
             },
             verified: true,
         }
+    }
+
+    #[test]
+    fn interactive_selection_auto_selects_the_only_verified_exact_candidate() {
+        let registry = Registry::standard();
+        let context = system_context();
+        let instances = vec![apt_instance("apt:one")];
+        let queries = vec!["ripgrep".to_owned()];
+        let mut fuzzy = apt_candidate("ripgrep", "ripgrep-all", "apt:one", 800);
+        fuzzy.match_kind = MatchKind::Prefix;
+        let exact = apt_candidate("ripgrep", "ripgrep", "apt:one", 1_000);
+        let candidates = vec![fuzzy, exact];
+
+        let selections = select_installations(SelectionRequest {
+            registry: &registry,
+            context: &context,
+            instances: &instances,
+            queries: &queries,
+            candidates: &candidates,
+            target_override: Some("system"),
+            instance_override: None,
+            allow_prompts: true,
+        })
+        .unwrap();
+
+        assert_eq!(selections[0].candidate.package, "ripgrep");
+        assert_eq!(selections[0].candidate.manager_instance_id, "apt:one");
+    }
+
+    #[test]
+    fn interactive_selection_prompts_when_exact_candidates_are_ambiguous() {
+        let first = apt_candidate("ripgrep", "ripgrep", "apt:one", 1_000);
+        let second = apt_candidate("ripgrep", "ripgrep", "apt:two", 1_000);
+
+        assert!(unique_verified_exact_candidate(&[first, second]).is_none());
+    }
+
+    #[test]
+    fn interactive_selection_does_not_auto_select_an_unverified_or_fuzzy_candidate() {
+        let mut unverified = apt_candidate("ripgrep", "ripgrep", "apt:one", 1_000);
+        unverified.verified = false;
+        let mut fuzzy = apt_candidate("ripgrep", "ripgrep-all", "apt:one", 800);
+        fuzzy.match_kind = MatchKind::Prefix;
+
+        assert!(unique_verified_exact_candidate(&[unverified, fuzzy]).is_none());
     }
 
     #[test]

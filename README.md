@@ -136,8 +136,6 @@ src/
 └── ui.rs       Rendering, interactive selection, and confirmation
 ```
 
-Adapters produce structured command specifications; only the process executor launches install commands.
-
 ## License
 
 [MIT](LICENSE)
